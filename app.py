@@ -1,17 +1,14 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
+import os
 
 app = Flask(__name__)
 CORS(app)
 
 # ---------------- DB CONNECTION ----------------
 conn = psycopg2.connect(
-    database="gameproject",
-    user="postgres",
-    password="newpassword",
-    host="localhost",
-    port="5432"
+    os.environ["DATABASE_URL"]
 )
 
 # ---------------- LOGIN ----------------
