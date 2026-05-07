@@ -47,7 +47,9 @@ def signup():
     existing_user = cur.fetchone()
 
     if existing_user:
-        return jsonify({ "message": "Username already exist" })
+        return jsonify({
+            "message": "Username already exist"
+        })
 
     cur.execute(
         "INSERT INTO users (username, password) VALUES (%s, %s)",
@@ -106,8 +108,7 @@ def save_score():
     # keep only last 10 scores
     cur.execute(
         """
-        DELETE FROM scores
-        WHERE id IN (
+        DELETE FROM scores WHERE id IN (
             SELECT id FROM scores
             WHERE username=%s
             ORDER BY id DESC
@@ -134,41 +135,118 @@ def save_score():
                 (score, username)
             )
 
-        cur.execute(
-            "UPDATE users SET score=%s WHERE username=%s",
-            (score, username)
-        )
+    cur.execute(
+        "UPDATE users SET score=%s WHERE username=%s",
+        (score, username)
+    )
 
     conn.commit()
 
     return jsonify({"message": "Score saved"})
 
 
-# ---------------- LEADERBOARD ----------------
-@app.route("/leaderboard")
-def leaderboard():
+#________user leaderboard_________#
+@app.route("/my_score/<username>")
+def my_score(username):
+    conn = psycopg2.connect(
+        database="gameproject",
+        user="postgres",
+        password="newpassword",
+        host="localhost",
+        port="5432"
+    )
     cur = conn.cursor()
 
     cur.execute("""
         SELECT username, score, high_score
         FROM users
-        ORDER BY high_score DESC
-    """)
+        WHERE username=%s
+    """, (username,))
+
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({
+            "leaderboard": [{
+                "username": row[0],
+                "score": row[1],
+                "high_score": row[2]
+            }]
+        })
+
+    return jsonify({"leaderboard": []})
+
+
+#####leaderboard#######
+
+
+@app.route("/leaderboard/<username>")
+def leaderboard(username):
+    conn = psycopg2.connect(
+    database="gameproject",
+    user="postgres",
+    password="newpassword",
+    host="localhost",
+    port="5432"
+)
+    cur = conn.cursor()
+
+    # get friends
+    cur.execute("""
+        SELECT user1, user2 FROM friends
+        WHERE user1=%s OR user2=%s
+    """, (username, username))
 
     rows = cur.fetchall()
 
-    leaderboard_data = []
+    friends = set()
 
+    for u1, u2 in rows:
+        if u1 == username:
+            friends.add(u2)
+        else:
+            friends.add(u1)
+
+    # include self
+    friends.add(username)
+
+    # convert to tuple for SQL
+    friends_tuple = tuple(friends)
+
+    # handle single value tuple edge case
+    if len(friends_tuple) == 1:
+        query = """
+            SELECT username, score, high_score
+            FROM users
+            WHERE username=%s
+        """
+        cur.execute(query, (username,))
+    else:
+        query = f"""
+            SELECT username, score, high_score
+            FROM users
+            WHERE username IN %s
+            ORDER BY high_score DESC
+        """
+        cur.execute(query, (friends_tuple,))
+
+    rows = cur.fetchall()
+
+    result = []
     for r in rows:
-        leaderboard_data.append({
+        result.append({
             "username": r[0],
             "score": r[1],
             "high_score": r[2]
         })
 
-    return jsonify({
-        "leaderboard": leaderboard_data
-    })
+    cur.close()
+    conn.close()
+
+    return jsonify({"leaderboard": result})
 
 
 # ---------------- SCORE HISTORY ----------------
@@ -176,13 +254,15 @@ def leaderboard():
 def score_history(username):
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT score
-        FROM scores
+    cur.execute(
+        """
+        SELECT score FROM scores
         WHERE username=%s
         ORDER BY id DESC
         LIMIT 10
-    """, (username,))
+        """,
+        (username,)
+    )
 
     rows = cur.fetchall()
 
@@ -202,33 +282,53 @@ def score_history(username):
 @app.route("/send_request", methods=["POST"])
 def send_request():
     data = request.json
-    cur = conn.cursor()
 
     sender = data["sender"]
     receiver = data["receiver"]
 
-    cur.execute(
-        """
-        SELECT * FROM friend_requests
-        WHERE sender=%s AND receiver=%s
-        """,
-        (sender, receiver)
+    conn = psycopg2.connect(
+        database="gameproject",
+        user="postgres",
+        password="newpassword",
+        host="localhost",
+        port="5432"
     )
 
-    existing = cur.fetchone()
+    cur = conn.cursor()
 
-    if existing:
-        return jsonify({"message": "Request already sent"})
+    # cannot add yourself
+    if sender == receiver:
+        return jsonify({"message": "Cannot add yourself"})
 
-    cur.execute(
-        """
-        INSERT INTO friend_requests (sender, receiver)
-        VALUES (%s, %s)
-        """,
-        (sender, receiver)
-    )
+    # already friends?
+    cur.execute("""
+        SELECT * FROM friends
+        WHERE (user1=%s AND user2=%s)
+        OR (user1=%s AND user2=%s)
+    """, (sender, receiver, receiver, sender))
+
+    existing_friend = cur.fetchone()
+
+    if existing_friend:
+        return jsonify({"message": "Already friends"})
+
+    # delete OLD requests between both users
+    cur.execute("""
+        DELETE FROM friend_requests
+        WHERE (sender=%s AND receiver=%s)
+        OR (sender=%s AND receiver=%s)
+    """, (sender, receiver, receiver, sender))
+
+    # insert fresh request
+    cur.execute("""
+        INSERT INTO friend_requests (sender, receiver, status)
+        VALUES (%s, %s, 'pending')
+    """, (sender, receiver))
 
     conn.commit()
+
+    cur.close()
+    conn.close()
 
     return jsonify({"message": "Friend request sent"})
 
@@ -240,8 +340,7 @@ def requests(username):
 
     cur.execute(
         """
-        SELECT id, sender
-        FROM friend_requests
+        SELECT id, sender FROM friend_requests
         WHERE receiver=%s AND status='pending'
         """,
         (username,)
@@ -257,7 +356,9 @@ def requests(username):
             "sender": r[1]
         })
 
-    return jsonify({"requests": requests_data})
+    return jsonify({
+        "requests": requests_data
+    })
 
 
 # ---------------- ACCEPT REQUEST ----------------
@@ -270,19 +371,103 @@ def accept_request():
     sender = data["sender"]
     receiver = data["receiver"]
 
+    # mark request accepted
     cur.execute(
         "UPDATE friend_requests SET status='accepted' WHERE id=%s",
         (request_id,)
     )
 
+    # 🔴 CHECK if already friends (both directions)
+    cur.execute("""
+        SELECT * FROM friends
+        WHERE (user1=%s AND user2=%s)
+        OR (user1=%s AND user2=%s)
+    """, (sender, receiver, receiver, sender))
+
+    existing = cur.fetchone()
+
+    if not existing:
+        cur.execute(
+            "INSERT INTO friends (user1, user2) VALUES (%s, %s)",
+            (sender, receiver)
+        )
+
+    conn.commit()
+    return jsonify({"message": "Friend request accepted"})
+
+
+# ---------------- REJECT REQUEST ----------------
+@app.route("/reject_request", methods=["POST"])
+def reject_request():
+    data = request.json
+    cur = conn.cursor()
+
     cur.execute(
-        "INSERT INTO friends (user1, user2) VALUES (%s, %s)",
-        (sender, receiver)
+        "UPDATE friend_requests SET status='rejected' WHERE id=%s",
+        (data["request_id"],)
     )
 
     conn.commit()
+    return jsonify({"message": "Friend request rejected"})
 
-    return jsonify({"message": "Friend request accepted"})
+
+# ---------------- GET FRIENDS ----------------
+@app.route("/friends/<username>")
+def get_friends(username):
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT user1, user2 FROM friends
+        WHERE user1=%s OR user2=%s
+    """, (username, username))
+
+    rows = cur.fetchall()
+
+    friends = []
+    for u1, u2 in rows:
+        friends.append(u2 if u1 == username else u1)
+
+    return jsonify({"friends": friends})
+
+
+# ----------------Remove friend---------
+
+@app.route("/remove_friend", methods=["POST"])
+def remove_friend():
+    data = request.json
+    user1 = data["user1"]
+    user2 = data["user2"]
+
+    conn = psycopg2.connect(
+        database="gameproject",
+        user="postgres",
+        password="newpassword",
+        host="localhost",
+        port="5432"
+    )
+
+    cur = conn.cursor()
+
+    # remove friendship
+    cur.execute("""
+        DELETE FROM friends
+        WHERE (user1=%s AND user2=%s)
+        OR (user1=%s AND user2=%s)
+    """, (user1, user2, user2, user1))
+
+    # remove old requests
+    cur.execute("""
+        DELETE FROM friend_requests
+        WHERE (sender=%s AND receiver=%s)
+        OR (sender=%s AND receiver=%s)
+    """, (user1, user2, user2, user1))
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Friend removed"})
 
 
 # ---------------- RUN ----------------
