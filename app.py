@@ -11,6 +11,9 @@ conn = psycopg2.connect(
     os.environ["DATABASE_URL"]
 )
 
+@app.route("/")
+def home():
+    return "Flask backend running"
 # ---------------- LOGIN ----------------
 @app.route("/login", methods=["POST"])
 def login():
