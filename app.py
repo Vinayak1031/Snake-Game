@@ -469,7 +469,9 @@ def remove_friend():
 
     return jsonify({"message": "Friend removed"})
 
-
+@app.route("/test")
+def test():
+    return "test route works"
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
