@@ -7,13 +7,18 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------------- DB CONNECTION ----------------
-conn = psycopg2.connect(
-    os.environ["DATABASE_URL"]
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-@app.route("/")
-def home():
-    return "Flask backend running"
+if DATABASE_URL:
+    conn = psycopg2.connect(DATABASE_URL)
+else:
+    conn = psycopg2.connect(
+        database="gameproject",
+        user="postgres",
+        password="newpassword",
+        host="localhost",
+        port="5432"
+    )
 # ---------------- LOGIN ----------------
 @app.route("/login", methods=["POST"])
 def login():
